@@ -10,7 +10,7 @@ theme on Linux based on the time of day. This is an extension to that project.
 Install directly from Git using cargo:
 
 ```bash
-cargo install --git https://github.com/nicdgonzalez/knight
+cargo install --git https://github.com/nicdgonzalez/tmux-knight
 ```
 
 ## Requirements
