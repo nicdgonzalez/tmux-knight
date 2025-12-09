@@ -7,6 +7,7 @@
 )]
 
 use std::io::Write as _;
+use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 use std::{fs, io, thread};
@@ -54,7 +55,7 @@ fn try_main() -> anyhow::Result<ExitCode> {
     let dark_theme = tmux_themes.join("dark.conf");
     let current_theme = tmux_themes.join("current.conf");
     let mut last_warning = Option::<Instant>::None;
-    let interval = Duration::from_millis(3000);
+    let interval = Duration::from_millis(1500);
 
     loop {
         let next_tick = Instant::now() + interval;
@@ -64,42 +65,27 @@ fn try_main() -> anyhow::Result<ExitCode> {
 
         match system_theme {
             Theme::Light => {
-                // Check if the current theme is already light mode.
-                match (current_theme.canonicalize(), light_theme.canonicalize()) {
-                    (Ok(linked), Ok(light)) => {
-                        if linked == light {
-                            let now = Instant::now();
-                            if now < next_tick {
-                                thread::sleep(next_tick - now);
-                            }
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-
-                if let Err(err) = fs::remove_file(&current_theme) {
-                    error!("failed to remove unlink previous theme: {err}");
-
-                    let now = Instant::now();
-                    if now < next_tick {
-                        thread::sleep(next_tick - now);
-                    }
-
+                if is_target_theme(&current_theme, &light_theme) {
+                    maybe_sleep(next_tick);
                     continue;
                 }
 
-                if let Err(err) = symlink::symlink_file(&light_theme, &current_theme) {
-                    if last_warning
+                if let Err(err) = fs::remove_file(&current_theme) {
+                    error!("failed to unlink previous theme: {err}");
+                    maybe_sleep(next_tick);
+                    continue;
+                }
+
+                if let Err(err) = symlink::symlink_file(&light_theme, &current_theme)
+                    && last_warning
                         .is_none_or(|w| Instant::now() >= (w + Duration::from_secs(60 * 10)))
-                    {
-                        warn!("failed to symlink to light theme: {err}");
-                        last_warning = Some(Instant::now());
-                    }
+                {
+                    warn!("failed to symlink to light theme: {err}");
+                    last_warning = Some(Instant::now());
                 }
 
                 match Command::new("tmux")
-                    .args(["source-file", &current_theme.to_string_lossy().to_string()])
+                    .args(["source-file", &current_theme.to_string_lossy()])
                     .status()
                 {
                     Ok(status) => match status.code() {
@@ -112,41 +98,30 @@ fn try_main() -> anyhow::Result<ExitCode> {
             }
             Theme::Dark => {
                 // Check if the current theme is already dark mode.
-                match (current_theme.canonicalize(), dark_theme.canonicalize()) {
-                    (Ok(linked), Ok(light)) => {
-                        if linked == light {
-                            let now = Instant::now();
-                            if now < next_tick {
-                                thread::sleep(next_tick - now);
-                            }
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-
-                if let Err(err) = fs::remove_file(&current_theme) {
-                    error!("failed to remove unlink previous theme: {err}");
-
-                    let now = Instant::now();
-                    if now < next_tick {
-                        thread::sleep(next_tick - now);
-                    }
-
+                if let (Ok(linked), Ok(dark)) =
+                    (current_theme.canonicalize(), dark_theme.canonicalize())
+                    && linked == dark
+                {
+                    maybe_sleep(next_tick);
                     continue;
                 }
 
-                if let Err(err) = symlink::symlink_file(&dark_theme, &current_theme) {
-                    if last_warning
+                if let Err(err) = fs::remove_file(&current_theme) {
+                    error!("failed to unlink previous theme: {err}");
+                    maybe_sleep(next_tick);
+                    continue;
+                }
+
+                if let Err(err) = symlink::symlink_file(&dark_theme, &current_theme)
+                    && last_warning
                         .is_none_or(|w| Instant::now() >= (w + Duration::from_secs(60 * 10)))
-                    {
-                        warn!("failed to symlink to new theme: {err}");
-                        last_warning = Some(Instant::now());
-                    }
+                {
+                    warn!("failed to symlink to new theme: {err}");
+                    last_warning = Some(Instant::now());
                 }
 
                 match Command::new("tmux")
-                    .args(["source-file", &current_theme.to_string_lossy().to_string()])
+                    .args(["source-file", &current_theme.to_string_lossy()])
                     .status()
                 {
                     Ok(status) => match status.code() {
@@ -159,11 +134,22 @@ fn try_main() -> anyhow::Result<ExitCode> {
             }
         }
 
-        let now = Instant::now();
-        if now < next_tick {
-            thread::sleep(next_tick - now);
-        }
+        maybe_sleep(next_tick);
     }
+}
+
+fn maybe_sleep(next_tick: Instant) {
+    let now = Instant::now();
+    if now < next_tick {
+        thread::sleep(next_tick - now);
+    }
+}
+
+fn is_target_theme(current: &Path, target: &Path) -> bool {
+    matches!(
+        (current.canonicalize(), target.canonicalize()),
+        (Ok(linked), Ok(target)) if linked == target
+    )
 }
 
 fn get_current_theme() -> anyhow::Result<Theme> {
